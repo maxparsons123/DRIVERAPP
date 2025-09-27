@@ -590,7 +590,7 @@ document.addEventListener('DOMContentLoaded', () => {
 </svg>
 `;
   function createBlackCabIcon(heading = 0) {
-    const svgUrl = 'image/svg+xml;base64,' + btoa(BLACK_CAB_SVG);
+    const svgUrl = 'data:image/svg+xml;base64,' + btoa(BLACK_CAB_SVG);
     return L.divIcon({
       html: `<img src="${svgUrl}" style="width:36px; height:36px; transform: rotate(${heading}deg);">`,
       iconSize: [36, 36],
@@ -713,7 +713,7 @@ document.addEventListener('DOMContentLoaded', () => {
     );
     connectMQTT();
   }
-  // ... (all your original menu, chat, job history, settings functions from Pasted_Text_1758814480305.txt) ...
+
   // ===== MENU NAVIGATION =====
   function toggleMenu() {
     isMenuOpen = !isMenuOpen;
@@ -1048,67 +1048,62 @@ document.addEventListener('DOMContentLoaded', () => {
     return "#" + "00000".substring(0, 6 - c.length) + c;
   }
 
-  // ===== AUTO VOICE LISTENING FOR JOBS =====
-  let voiceRecognition = null;
-  let isVoiceActive = false;
+  // ===== AUTO VOICE RECOGNITION FOR JOBS =====
+  let voiceRecognizer = null;
+  let isListeningForJob = false;
 
-  function initAutoVoice() {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      console.log("Voice recognition not supported");
-      return;
-    }
+  function startListeningForJobResponse() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    voiceRecognition = new SpeechRecognition();
-    voiceRecognition.lang = 'en-US';
-    voiceRecognition.continuous = false;
-    voiceRecognition.interimResults = false;
-  }
+    if (!SpeechRecognition || isListeningForJob || !currentJob) return;
 
-  function speakTTS(text) {
-    if (!('speechSynthesis' in window)) return;
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-GB';
-    utterance.rate = 0.9;
-    speechSynthesis.cancel();
-    speechSynthesis.speak(utterance);
-  }
+    voiceRecognizer = new SpeechRecognition();
+    voiceRecognizer.lang = 'en-GB';
+    voiceRecognizer.continuous = false;
+    voiceRecognizer.interimResults = false;
 
-  function startAutoVoiceListening() {
-    if (!voiceRecognition || isVoiceActive || !currentJob) return;
-    isVoiceActive = true;
-    voiceRecognition.start();
+    voiceRecognizer.onresult = (event) => {
+      const transcript = event.results[0][0].transcript.toLowerCase();
+      if (transcript.includes('accept') && !transcript.includes('reject')) {
+        respondToJob(true);
+        if ('speechSynthesis' in window) {
+          const utterance = new SpeechSynthesisUtterance("Job accepted. Thank you.");
+          utterance.lang = 'en-GB';
+          utterance.rate = 0.9;
+          speechSynthesis.cancel();
+          speechSynthesis.speak(utterance);
+        }
+      } else if (transcript.includes('reject')) {
+        respondToJob(false);
+        if ('speechSynthesis' in window) {
+          const utterance = new SpeechSynthesisUtterance("Job rejected. Understood.");
+          utterance.lang = 'en-GB';
+          utterance.rate = 0.9;
+          speechSynthesis.cancel();
+          speechSynthesis.speak(utterance);
+        }
+      }
+    };
+
+    voiceRecognizer.onend = () => { isListeningForJob = false; };
+    voiceRecognizer.onerror = () => { isListeningForJob = false; };
+
+    isListeningForJob = true;
+    voiceRecognizer.start();
+
+    // Auto-stop after 10 seconds
     setTimeout(() => {
-      if (isVoiceActive) {
-        voiceRecognition.stop();
-        isVoiceActive = false;
+      if (isListeningForJob) {
+        voiceRecognizer.stop();
+        isListeningForJob = false;
       }
     }, 10000);
   }
 
-  function stopAutoVoiceListening() {
-    if (voiceRecognition && isVoiceActive) {
-      voiceRecognition.stop();
-      isVoiceActive = false;
+  function stopListeningForJob() {
+    if (voiceRecognizer && isListeningForJob) {
+      voiceRecognizer.stop();
+      isListeningForJob = false;
     }
-  }
-
-  // Initialize voice
-  initAutoVoice();
-
-  if (voiceRecognition) {
-    voiceRecognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript.toLowerCase().trim();
-      if (!currentJob) return;
-      if (transcript.includes('accept') && !transcript.includes('reject')) {
-        respondToJob(true);
-        speakTTS("Job accepted. Thank you.");
-      } else if (transcript.includes('reject')) {
-        respondToJob(false);
-        speakTTS("Job rejected. Understood.");
-      }
-    };
-    voiceRecognition.onerror = () => { isVoiceActive = false; };
-    voiceRecognition.onend = () => { isVoiceActive = false; };
   }
 
   // ===== MQTT =====
@@ -1139,7 +1134,7 @@ document.addEventListener('DOMContentLoaded', () => {
           addJobToHistory(data, 'processing');
 
           // === START AUTO VOICE LISTENING ===
-          startAutoVoiceListening();
+          startListeningForJobResponse();
 
           // === START 30-SECOND TIMER ===
           const timerEl = document.getElementById('jobTimer');
@@ -1155,7 +1150,7 @@ document.addEventListener('DOMContentLoaded', () => {
               jobPanel.style.display = 'none';
               currentJob = null;
               statusEl.innerHTML = '<span class="gps-source gps-poor"></span>⏰ Job expired';
-              stopAutoVoiceListening(); // 👈 stop voice on expiry
+              stopListeningForJob(); // 👈 stop voice on expiry
             }
           }, 1000);
           // === TTS FOR JOB OFFER ===
@@ -1299,7 +1294,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if(pickupMarker){ map.removeLayer(pickupMarker); pickupMarker = null; }
     if(routeLine){ map.removeLayer(routeLine); routeLine = null; }
     currentJob = null;
-    stopAutoVoiceListening(); // 👈 stop voice when responding
+    stopListeningForJob(); // 👈 stop voice when responding
   }
   // ===== EVENT LISTENERS =====
   document.getElementById('acceptBtn').addEventListener('click', () => respondToJob(true));
