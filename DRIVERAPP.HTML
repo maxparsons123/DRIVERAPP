@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Black Cab Unite</title>
+  <title>Black Cab Unite v1.0.1</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <style>
@@ -166,8 +166,8 @@
       display: none;
     }
     .mic-icon {
-      width: 56px;
-      height: 56px;
+      width: 48px;
+      height: 48px;
       background: #1f6feb;
       border-radius: 50%;
       display: flex;
@@ -175,7 +175,6 @@
       justify-content: center;
       color: white;
       font-weight: bold;
-      font-size: 24px;
       box-shadow: 0 0 12px #1f6feb;
       animation: micGlow 1.5s infinite alternate;
     }
@@ -184,10 +183,9 @@
       to { box-shadow: 0 0 24px #1f6feb, 0 0 32px #1f6feb; }
     }
     .mic-label {
-      font-size: 14px;
-      color: #333;
-      margin-top: 10px;
-      font-weight: 600;
+      font-size: 13px;
+      color: #555;
+      margin-top: 8px;
     }
     /* Driver icons */
     .other-driver-icon {
@@ -484,7 +482,7 @@
 <body>
   <div id="map"></div>
   <div id="headerBanner">
-    <div id="appTitle">Black Cab Unite</div>
+    <div id="appTitle">Black Cab Unite v1.0.1</div>
     <button id="menuBtn">☰</button>
   </div>
   <div id="status">Initializing...</div>
@@ -1190,24 +1188,7 @@ document.addEventListener('DOMContentLoaded', () => {
           pickupLocation.textContent = `${data.pubName} (${data.lat.toFixed(5)}, ${data.lng.toFixed(5)})`;
           customerPhone.textContent = data.customerPhone;
           jobPanel.style.display = 'block';
-          // === START TTS FIRST ===
-          if ('speechSynthesis' in window) {
-            const utterance = new SpeechSynthesisUtterance(
-              `New job! Pickup at ${data.pubName}. Customer phone: ${data.customerPhone}`
-            );
-            utterance.lang = 'en-GB';
-            utterance.rate = 0.9;
-            utterance.onend = () => {
-              // === START VOICE LISTENER AFTER TTS ENDS ===
-              startVoiceListener();
-            };
-            speechSynthesis.cancel();
-            speechSynthesis.speak(utterance);
-          } else {
-            // If no TTS, start mic immediately
-            startVoiceListener();
-          }
-          addJobToHistory(data, 'processing');
+
           // === START 30-SECOND TIMER ===
           const timerEl = document.getElementById('jobTimer');
           const secondsEl = document.getElementById('timerSeconds');
@@ -1225,6 +1206,26 @@ document.addEventListener('DOMContentLoaded', () => {
               statusEl.innerHTML = '<span class="gps-source gps-poor"></span>⏰ Job expired';
             }
           }, 1000);
+
+          // === TTS FIRST, THEN MIC AFTER TTS ENDS ===
+          if ('speechSynthesis' in window) {
+            const utterance = new SpeechSynthesisUtterance(
+              `New job! Pickup at ${data.pubName}. Customer phone: ${data.customerPhone}`
+            );
+            utterance.lang = 'en-GB';
+            utterance.rate = 0.9;
+            utterance.onend = () => {
+              // ✅ Only start mic AFTER TTS finishes
+              startVoiceListener();
+            };
+            speechSynthesis.cancel();
+            speechSynthesis.speak(utterance);
+          } else {
+            // Fallback: no TTS → start mic immediately
+            startVoiceListener();
+          }
+
+          addJobToHistory(data, 'processing');
         }
         if(topic.startsWith("jobs/") && topic.endsWith(`/result/${DRIVER_ID}`)){
           const jobId = topic.split('/')[1];
