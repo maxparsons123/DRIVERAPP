@@ -1048,109 +1048,94 @@ document.addEventListener('DOMContentLoaded', () => {
     return "#" + "00000".substring(0, 6 - c.length) + c;
   }
 
-  // ===== JOB VOICE LISTENER =====
-  class JobVoiceListener {
-    constructor({ lang = "en-US", timeoutMs = 0, onResponse = () => {} } = {}) {
-      this.lang = lang;
-      this.timeoutMs = timeoutMs;
-      this.onResponse = onResponse;
-      this.recognition = null;
-      this.isActive = false;
-      this.timeoutHandle = null;
+  // ===== VOICE LISTENER WITH TTS/STT CONFLICT RESOLUTION =====
+  let speechRecognition = null;
+  let retryCount = 0;
+  const MAX_RETRIES = 5;
 
-      const SpeechRecognition =
-        window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SpeechRecognition) {
-        console.warn("SpeechRecognition not supported in this browser.");
-        return;
-      }
-
-      this.SpeechRecognition = SpeechRecognition;
+  function startVoiceListener() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      console.warn("SpeechRecognition not supported");
+      return;
     }
 
-    start() {
-      if (!this.SpeechRecognition || this.isActive) return;
+    retryCount = 0;
+    speechRecognition = new SpeechRecognition();
+    speechRecognition.lang = 'en-US';
+    speechRecognition.continuous = false;
+    speechRecognition.interimResults = false;
 
-      this.recognition = new this.SpeechRecognition();
-      this.recognition.lang = this.lang;
-      this.recognition.continuous = false;
-      this.recognition.interimResults = false;
+    speechRecognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript.toLowerCase().trim();
+      console.log("Heard:", transcript);
 
-      this.recognition.onresult = (event) => {
-        const transcript = event.results[0][0].transcript.toLowerCase().trim();
-        if (transcript.includes("accept") && !transcript.includes("reject")) {
-          this.speak("Job accepted. Thank you.");
-          this.onResponse(true);
-          this.stop();
-        } else if (transcript.includes("reject")) {
-          this.speak("Job rejected. Understood.");
-          this.onResponse(false);
-          this.stop();
-        } else {
-          this.restart();
+      if (/\baccept\b/.test(transcript) && !/\breject\b/.test(transcript)) {
+        respondToJob(true);
+        speakFeedback("Job accepted. Thank you.");
+      } else if (/\breject\b/.test(transcript)) {
+        respondToJob(false);
+        speakFeedback("Job rejected. Understood.");
+      }
+    };
+
+    speechRecognition.onerror = (e) => {
+      if (e.error !== 'aborted') {
+        console.error("Voice error:", e.error);
+        retryCount++;
+        if (retryCount > MAX_RETRIES) {
+          console.warn("Max retries reached. Stopping voice listener.");
+          speechRecognition = null;
         }
-      };
-
-      this.recognition.onerror = (err) => {
-        if (err.error !== 'aborted') this.restart();
-      };
-
-      this.recognition.onend = () => {
-        if (this.isActive) this.restart();
-      };
-
-      this.isActive = true;
-      this.recognition.start();
-
-      if (this.timeoutMs > 0) {
-        this.timeoutHandle = setTimeout(() => {
-          this.stop();
-        }, this.timeoutMs);
       }
-    }
+    };
 
-    restart() {
-      if (!this.isActive) return;
-      setTimeout(() => {
-        try {
-          this.recognition.start();
-        } catch (e) {
-          console.error("Restart failed:", e);
-        }
-      }, 800);
-    }
-
-    stop() {
-      this.isActive = false;
-      clearTimeout(this.timeoutHandle);
-      if (this.recognition) {
-        try { this.recognition.stop(); } catch (e) {}
+    speechRecognition.onend = () => {
+      if (jobPanel.style.display === 'block' && retryCount <= MAX_RETRIES) {
+        setTimeout(() => {
+          if (jobPanel.style.display === 'block') {
+            startVoiceListener();
+          }
+        }, 500);
+      } else {
+        speechRecognition = null;
       }
-    }
+    };
 
-    speak(message) {
-      if (!("speechSynthesis" in window)) return;
-      const utterance = new SpeechSynthesisUtterance(message);
-      utterance.lang = "en-GB";
-      utterance.rate = 0.9;
-      speechSynthesis.cancel();
-      speechSynthesis.speak(utterance);
+    try {
+      speechRecognition.start();
+    } catch (err) {
+      console.error("Failed to start SpeechRecognition:", err);
+      speechRecognition = null;
     }
   }
 
-  const jobVoiceListener = new JobVoiceListener({
-    timeoutMs: 0,
-    onResponse: (accepted) => {
-      respondToJob(accepted);
+  function stopVoiceListener() {
+    if (speechRecognition) {
+      speechRecognition.abort();
+      speechRecognition = null;
     }
-  });
-
-  function startJobVoiceListener() {
-    jobVoiceListener.start();
   }
 
-  function stopJobVoiceListener() {
-    jobVoiceListener.stop();
+  function speakFeedback(message) {
+    if (!('speechSynthesis' in window)) return;
+    
+    const utterance = new SpeechSynthesisUtterance(message);
+    utterance.lang = 'en-GB';
+    utterance.rate = 0.9;
+
+    // Pause STT
+    if (speechRecognition) speechRecognition.abort();
+
+    utterance.onend = () => {
+      // Resume STT only if job is still active
+      if (jobPanel.style.display === 'block') {
+        startVoiceListener();
+      }
+    };
+
+    speechSynthesis.cancel();
+    speechSynthesis.speak(utterance);
   }
 
   // ===== MQTT =====
@@ -1178,7 +1163,7 @@ document.addEventListener('DOMContentLoaded', () => {
           pickupLocation.textContent = `${data.pubName} (${data.lat.toFixed(5)}, ${data.lng.toFixed(5)})`;
           customerPhone.textContent = data.customerPhone;
           jobPanel.style.display = 'block';
-          startJobVoiceListener(); // 👈 START VOICE LISTENING
+          startVoiceListener(); // 👈 START VOICE LISTENING
           addJobToHistory(data, 'processing');
           // === START 30-SECOND TIMER ===
           const timerEl = document.getElementById('jobTimer');
@@ -1192,7 +1177,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (secondsLeft <= 0) {
               clearInterval(timerInterval);
               jobPanel.style.display = 'none';
-              stopJobVoiceListener(); // 👈 STOP VOICE
+              stopVoiceListener(); // 👈 STOP VOICE
               currentJob = null;
               statusEl.innerHTML = '<span class="gps-source gps-poor"></span>⏰ Job expired';
             }
@@ -1335,7 +1320,7 @@ document.addEventListener('DOMContentLoaded', () => {
       updateJobStatus(currentJob.job, 'rejected');
     }
     jobPanel.style.display = 'none';
-    stopJobVoiceListener(); // 👈 STOP VOICE
+    stopVoiceListener(); // 👈 STOP VOICE
     if(pickupMarker){ map.removeLayer(pickupMarker); pickupMarker = null; }
     if(routeLine){ map.removeLayer(routeLine); routeLine = null; }
     currentJob = null;
