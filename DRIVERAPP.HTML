@@ -1048,62 +1048,109 @@ document.addEventListener('DOMContentLoaded', () => {
     return "#" + "00000".substring(0, 6 - c.length) + c;
   }
 
-  // ===== AUTO VOICE RECOGNITION FOR JOBS =====
-  let voiceRecognizer = null;
-  let isListeningForJob = false;
+  // ===== JOB VOICE LISTENER =====
+  class JobVoiceListener {
+    constructor({ lang = "en-US", timeoutMs = 0, onResponse = () => {} } = {}) {
+      this.lang = lang;
+      this.timeoutMs = timeoutMs;
+      this.onResponse = onResponse;
+      this.recognition = null;
+      this.isActive = false;
+      this.timeoutHandle = null;
 
-  function startListeningForJobResponse() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition || isListeningForJob || !currentJob) return;
-
-    voiceRecognizer = new SpeechRecognition();
-    voiceRecognizer.lang = 'en-GB';
-    voiceRecognizer.continuous = false;
-    voiceRecognizer.interimResults = false;
-
-    voiceRecognizer.onresult = (event) => {
-      const transcript = event.results[0][0].transcript.toLowerCase();
-      if (transcript.includes('accept') && !transcript.includes('reject')) {
-        respondToJob(true);
-        if ('speechSynthesis' in window) {
-          const utterance = new SpeechSynthesisUtterance("Job accepted. Thank you.");
-          utterance.lang = 'en-GB';
-          utterance.rate = 0.9;
-          speechSynthesis.cancel();
-          speechSynthesis.speak(utterance);
-        }
-      } else if (transcript.includes('reject')) {
-        respondToJob(false);
-        if ('speechSynthesis' in window) {
-          const utterance = new SpeechSynthesisUtterance("Job rejected. Understood.");
-          utterance.lang = 'en-GB';
-          utterance.rate = 0.9;
-          speechSynthesis.cancel();
-          speechSynthesis.speak(utterance);
-        }
+      const SpeechRecognition =
+        window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        console.warn("SpeechRecognition not supported in this browser.");
+        return;
       }
-    };
 
-    voiceRecognizer.onend = () => { isListeningForJob = false; };
-    voiceRecognizer.onerror = () => { isListeningForJob = false; };
+      this.SpeechRecognition = SpeechRecognition;
+    }
 
-    isListeningForJob = true;
-    voiceRecognizer.start();
+    start() {
+      if (!this.SpeechRecognition || this.isActive) return;
 
-    // Auto-stop after 10 seconds
-    setTimeout(() => {
-      if (isListeningForJob) {
-        voiceRecognizer.stop();
-        isListeningForJob = false;
+      this.recognition = new this.SpeechRecognition();
+      this.recognition.lang = this.lang;
+      this.recognition.continuous = false;
+      this.recognition.interimResults = false;
+
+      this.recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript.toLowerCase().trim();
+        if (transcript.includes("accept") && !transcript.includes("reject")) {
+          this.speak("Job accepted. Thank you.");
+          this.onResponse(true);
+          this.stop();
+        } else if (transcript.includes("reject")) {
+          this.speak("Job rejected. Understood.");
+          this.onResponse(false);
+          this.stop();
+        } else {
+          this.restart();
+        }
+      };
+
+      this.recognition.onerror = (err) => {
+        if (err.error !== 'aborted') this.restart();
+      };
+
+      this.recognition.onend = () => {
+        if (this.isActive) this.restart();
+      };
+
+      this.isActive = true;
+      this.recognition.start();
+
+      if (this.timeoutMs > 0) {
+        this.timeoutHandle = setTimeout(() => {
+          this.stop();
+        }, this.timeoutMs);
       }
-    }, 10000);
+    }
+
+    restart() {
+      if (!this.isActive) return;
+      setTimeout(() => {
+        try {
+          this.recognition.start();
+        } catch (e) {
+          console.error("Restart failed:", e);
+        }
+      }, 800);
+    }
+
+    stop() {
+      this.isActive = false;
+      clearTimeout(this.timeoutHandle);
+      if (this.recognition) {
+        try { this.recognition.stop(); } catch (e) {}
+      }
+    }
+
+    speak(message) {
+      if (!("speechSynthesis" in window)) return;
+      const utterance = new SpeechSynthesisUtterance(message);
+      utterance.lang = "en-GB";
+      utterance.rate = 0.9;
+      speechSynthesis.cancel();
+      speechSynthesis.speak(utterance);
+    }
   }
 
-  function stopListeningForJob() {
-    if (voiceRecognizer && isListeningForJob) {
-      voiceRecognizer.stop();
-      isListeningForJob = false;
+  const jobVoiceListener = new JobVoiceListener({
+    timeoutMs: 0,
+    onResponse: (accepted) => {
+      respondToJob(accepted);
     }
+  });
+
+  function startJobVoiceListener() {
+    jobVoiceListener.start();
+  }
+
+  function stopJobVoiceListener() {
+    jobVoiceListener.stop();
   }
 
   // ===== MQTT =====
@@ -1131,11 +1178,8 @@ document.addEventListener('DOMContentLoaded', () => {
           pickupLocation.textContent = `${data.pubName} (${data.lat.toFixed(5)}, ${data.lng.toFixed(5)})`;
           customerPhone.textContent = data.customerPhone;
           jobPanel.style.display = 'block';
+          startJobVoiceListener(); // 👈 START VOICE LISTENING
           addJobToHistory(data, 'processing');
-
-          // === START AUTO VOICE LISTENING ===
-          startListeningForJobResponse();
-
           // === START 30-SECOND TIMER ===
           const timerEl = document.getElementById('jobTimer');
           const secondsEl = document.getElementById('timerSeconds');
@@ -1148,9 +1192,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (secondsLeft <= 0) {
               clearInterval(timerInterval);
               jobPanel.style.display = 'none';
+              stopJobVoiceListener(); // 👈 STOP VOICE
               currentJob = null;
               statusEl.innerHTML = '<span class="gps-source gps-poor"></span>⏰ Job expired';
-              stopListeningForJob(); // 👈 stop voice on expiry
             }
           }, 1000);
           // === TTS FOR JOB OFFER ===
@@ -1291,10 +1335,10 @@ document.addEventListener('DOMContentLoaded', () => {
       updateJobStatus(currentJob.job, 'rejected');
     }
     jobPanel.style.display = 'none';
+    stopJobVoiceListener(); // 👈 STOP VOICE
     if(pickupMarker){ map.removeLayer(pickupMarker); pickupMarker = null; }
     if(routeLine){ map.removeLayer(routeLine); routeLine = null; }
     currentJob = null;
-    stopListeningForJob(); // 👈 stop voice when responding
   }
   // ===== EVENT LISTENERS =====
   document.getElementById('acceptBtn').addEventListener('click', () => respondToJob(true));
