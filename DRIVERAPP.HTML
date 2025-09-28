@@ -159,6 +159,34 @@
       background: linear-gradient(135deg, #dc3545, #e83e8c);
       color: white;
     }
+    /* Glowing Mic Indicator */
+    #micIndicator {
+      text-align: center;
+      margin: 16px 0;
+      display: none;
+    }
+    .mic-icon {
+      width: 48px;
+      height: 48px;
+      background: #1f6feb;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: bold;
+      box-shadow: 0 0 12px #1f6feb;
+      animation: micGlow 1.5s infinite alternate;
+    }
+    @keyframes micGlow {
+      from { box-shadow: 0 0 12px #1f6feb; }
+      to { box-shadow: 0 0 24px #1f6feb, 0 0 32px #1f6feb; }
+    }
+    .mic-label {
+      font-size: 13px;
+      color: #555;
+      margin-top: 8px;
+    }
     /* Driver icons */
     .other-driver-icon {
       width: 32px;
@@ -467,6 +495,13 @@
       <div class="job-info-value" id="customerPhone">Loading...</div>
       <div id="jobTimer">⏳ Expires in: <span id="timerSeconds">30</span>s</div>
     </div>
+
+    <!-- GLOWING MIC INDICATOR -->
+    <div id="micIndicator">
+      <div class="mic-icon">🎤</div>
+      <div class="mic-label">Say “accept” or “reject”</div>
+    </div>
+
     <div class="job-actions">
       <button class="job-btn accept-btn" id="acceptBtn">✅ ACCEPT JOB</button>
       <button class="job-btn reject-btn" id="rejectBtn">❌ REJECT</button>
@@ -581,6 +616,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const menuContent = document.getElementById('menuContent');
   const menuNavBtns = document.querySelectorAll('.menu-nav-btn');
   const loadingOverlay = document.getElementById('loadingOverlay');
+  const micIndicator = document.getElementById('micIndicator');
   // ===== BLACK CAB MARKER =====
   const BLACK_CAB_SVG = `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="36" height="36">
@@ -1048,10 +1084,18 @@ document.addEventListener('DOMContentLoaded', () => {
     return "#" + "00000".substring(0, 6 - c.length) + c;
   }
 
-  // ===== VOICE LISTENER WITH TTS/STT CONFLICT RESOLUTION =====
+  // ===== VOICE LISTENER WITH MIC INDICATOR =====
   let speechRecognition = null;
   let retryCount = 0;
   const MAX_RETRIES = 5;
+
+  function showMicIndicator() {
+    micIndicator.style.display = 'block';
+  }
+
+  function hideMicIndicator() {
+    micIndicator.style.display = 'none';
+  }
 
   function startVoiceListener() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1066,10 +1110,12 @@ document.addEventListener('DOMContentLoaded', () => {
     speechRecognition.continuous = false;
     speechRecognition.interimResults = false;
 
+    speechRecognition.onstart = () => {
+      showMicIndicator();
+    };
+
     speechRecognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript.toLowerCase().trim();
-      console.log("Heard:", transcript);
-
       if (/\baccept\b/.test(transcript) && !/\breject\b/.test(transcript)) {
         respondToJob(true);
         speakFeedback("Job accepted. Thank you.");
@@ -1084,13 +1130,13 @@ document.addEventListener('DOMContentLoaded', () => {
         console.error("Voice error:", e.error);
         retryCount++;
         if (retryCount > MAX_RETRIES) {
-          console.warn("Max retries reached. Stopping voice listener.");
           speechRecognition = null;
         }
       }
     };
 
     speechRecognition.onend = () => {
+      hideMicIndicator();
       if (jobPanel.style.display === 'block' && retryCount <= MAX_RETRIES) {
         setTimeout(() => {
           if (jobPanel.style.display === 'block') {
@@ -1111,6 +1157,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function stopVoiceListener() {
+    hideMicIndicator();
     if (speechRecognition) {
       speechRecognition.abort();
       speechRecognition = null;
@@ -1124,11 +1171,9 @@ document.addEventListener('DOMContentLoaded', () => {
     utterance.lang = 'en-GB';
     utterance.rate = 0.9;
 
-    // Pause STT
     if (speechRecognition) speechRecognition.abort();
 
     utterance.onend = () => {
-      // Resume STT only if job is still active
       if (jobPanel.style.display === 'block') {
         startVoiceListener();
       }
@@ -1163,7 +1208,7 @@ document.addEventListener('DOMContentLoaded', () => {
           pickupLocation.textContent = `${data.pubName} (${data.lat.toFixed(5)}, ${data.lng.toFixed(5)})`;
           customerPhone.textContent = data.customerPhone;
           jobPanel.style.display = 'block';
-          startVoiceListener(); // 👈 START VOICE LISTENING
+          startVoiceListener(); // 👈 START VOICE + MIC
           addJobToHistory(data, 'processing');
           // === START 30-SECOND TIMER ===
           const timerEl = document.getElementById('jobTimer');
@@ -1177,7 +1222,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (secondsLeft <= 0) {
               clearInterval(timerInterval);
               jobPanel.style.display = 'none';
-              stopVoiceListener(); // 👈 STOP VOICE
+              stopVoiceListener(); // 👈 STOP VOICE + HIDE MIC
               currentJob = null;
               statusEl.innerHTML = '<span class="gps-source gps-poor"></span>⏰ Job expired';
             }
@@ -1320,7 +1365,7 @@ document.addEventListener('DOMContentLoaded', () => {
       updateJobStatus(currentJob.job, 'rejected');
     }
     jobPanel.style.display = 'none';
-    stopVoiceListener(); // 👈 STOP VOICE
+    stopVoiceListener(); // 👈 HIDE MIC
     if(pickupMarker){ map.removeLayer(pickupMarker); pickupMarker = null; }
     if(routeLine){ map.removeLayer(routeLine); routeLine = null; }
     currentJob = null;
